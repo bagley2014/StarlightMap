@@ -62,16 +62,13 @@ const InhabitantSchema = new Schema({
 })
 const StatusMongoose = mongoose.model('Status', {
   date: Date,
-  Humans: [InhabitantSchema],
-  Halflings: [InhabitantSchema],
-  Dwarves: [InhabitantSchema],
-  Elves: [InhabitantSchema],
+  Survivors: [InhabitantSchema],
   Craft: String,
   Magic: String
 })
 
 
-function parser(data) {
+function survivorParser(data) {
   const ConditionsRegex = /Conditions: *((?:\w*[, ]?)*)/
   const ItemsRegex = /Items: *((?:\w*[, ]?)*)/
   const PosRegex = /Position: *(\d+), *(\d+)/
@@ -83,10 +80,17 @@ function parser(data) {
   for(let inhabitant of persoMatch) {
     const details = inhabitant.split(/\n/)
 
-    const position = details[2].match(PosRegex)
-    const health = details[3].match(HealthRegex)
-    const items = details[4].match(ItemsRegex)
-    const conditions = details[5].match(ConditionsRegex)
+    //TODO: clean temporary fix
+    if(
+      details[1].match(PosRegex) ||
+      details[1].match(HealthRegex) ||
+      details[1].match(ItemsRegex) ||
+      details[1].match(ConditionsRegex)) details[1] = ""
+
+    const position = inhabitant.match(PosRegex)
+    const health = inhabitant.match(HealthRegex)
+    const items = inhabitant.match(ItemsRegex)
+    const conditions = inhabitant.match(ConditionsRegex)
 
     /*
      * 1: Name
@@ -113,7 +117,68 @@ function parser(data) {
   return Inhabitants
 }
 
+function looseParser(data) {
+  const LooseItems = new Array();
+  const PosRegex = /(\d+), *(\d+) *:/;
+  const ItemsRegex = /\d+ [\w ]+,?/g;
+  const ItemRegex = /(\d+) ([\w ]+)/;
+
+  const lines = data.split(/\n/);
+  for (const line of lines) {
+    try {
+      const position = line.match(PosRegex);
+      const items = [];
+      for (const item of line.match(ItemsRegex)) {
+        const itemMatch = item.match(ItemRegex);
+        for (let count = 0; count < Number(itemMatch[1]); count++) {
+          items.push(itemMatch[2]);
+        }
+      }
+      LooseItems.push(new Inhabitant (
+        "Loose Items",
+        "",
+        position[1],
+        position[2],
+        0, 0, // Health, not valid
+        items,
+        ["Loose"]
+      ));
+    } catch (e) {
+      console.error(e);
+      console.error(line);
+    }
+  }
+  return LooseItems;
+}
+
+function structureParser(data) {
+  const Structures = new Array();
+  const PosRegex = /(\d+), *(\d+) *:/;
+
+  const lines = data.split(/\n/);
+  for (const line of lines) {
+    try {
+      const position = line.match(PosRegex);
+      const name = line.split(/:/)[1];
+      Structures.push(new Inhabitant (
+        name,
+        "Structure",
+        position[1],
+        position[2],
+        0, 0, // TODO: Parse health once we have example
+        [""],
+        ["Structure"]
+      ));
+    } catch (e) {
+      console.error(e);
+      console.error(line);
+    }
+  }
+  return Structures;
+}
+
 function refresh() {
+  console.info("Update started")
   return nightmare
     .goto('http://willsaveworldforgold.com/forum/viewtopic.php?f=11&t=243')
     .wait(5000)
@@ -155,26 +220,30 @@ function refresh() {
     }).run((error, result) => {
       if(error) console.error(error)
       result = JSON.parse(result);
-      for(race in result.Status) {
-        result.Status[race] = parser(result.Status[race])
+      for(race of ["Humans", "Halflings", "Dwarves", "Elves"]) {
+        result.Status[race] = survivorParser(result.Status[race])
       }
+      result.Status.LooseItems = looseParser(result.Status["Loose Items"])
+      result.Status.Structures = structureParser(result.Status["Structures"])
       request(result.MapUrl).pipe(fs.createWriteStream('save/map.png'));
 
       (new StatusMongoose({
         date: new Date(),
-        Humans: result.Status.Humans,
-        Halflings: result.Status.Halflings,
-        Dwarves: result.Status.Dwarves,
-        Elves: result.Status.Elves,
+        Survivors: [...result.Status.Humans,
+                    ...result.Status.Halflings,
+                    ...result.Status.Dwarves,
+                    ...result.Status.Elves,
+                    ...result.Status.LooseItems,
+                    ...result.Status.Structures],
         Craft: result.Crafting,
         Magic: result.Magic
-      })).save().then(_ => console.log("Updated"));
+      })).save().then(_ => console.info("Updated"));
     }).end()
 }
 
 function getInfoByCoord(x, y) {
   return new Promise((resolve, reject) => {
-    StatusMongoose.find({}, ['Humans', 'Halflings', 'Elves', 'Dwarves'], {
+    StatusMongoose.find({}, ['Survivors'], {
       skip:0,
       limit: 1,
       sort: {
@@ -182,8 +251,7 @@ function getInfoByCoord(x, y) {
       },
     }, (err, stat) => {
       if(err) { reject(err) }
-      stat = stat[0]
-      const inhab = [...stat.Humans, ...stat.Halflings, ...stat.Elves, ...stat.Dwarves]
+      const inhab = stat[0].Survivors
         .filter(i => i !== null && i !== undefined)
         .filter(i => i.Position.x == x && i.Position.y == y)
       resolve(inhab)
@@ -191,7 +259,63 @@ function getInfoByCoord(x, y) {
   })
 }
 
+function getCounts() {
+  return new Promise((resolve, reject) => {
+    StatusMongoose.find({}, ['Survivors.items', 'Survivors.condition'], {
+      skip:0,
+      limit: 1,
+      sort: {
+        date: -1
+      },
+    }).exec( (err, stat) => {
+      if(err) { reject(err) }
+      const count = stat[0].Survivors
+        .reduce((acc, cur) => {
+          const counting = cur.items.concat(cur.condition)
+          for (const item of counting) {
+            if (!item) continue
+            if (item in acc) acc[item]++
+            else acc[item] = 1
+          }
+          return acc
+        }, {})
+      resolve(count)
+    })
+  })
+}
+
+function getDetailsAboutStat(stat) {
+  return new Promise((resolve, reject) => {
+    StatusMongoose.find({}, ['Survivors'], {
+      skip: 0,
+      limit: 1,
+      sort: {
+        date: -1
+      }
+    }).exec((err, d) => {
+      if(err) { reject(err) }
+      const details = []
+      const survivors = d[0].Survivors;
+      for(const survivor of survivors) {
+        if(survivor.items.find(e => e === stat)
+          || survivor.condition.find(e => e === stat)) {
+          const count = [...survivor.items, ...survivor.condition]
+            .filter(elem => elem === stat)
+            .length
+          details.push([survivor.Name,
+                        survivor.Position.x,
+                        survivor.Position.y,
+                        count])
+        }
+      }
+      resolve(details)
+    })
+  })
+}
+
 module.exports = {
+  getDetailsAboutStat,
+  getCounts,
   getInfoByCoord,
   Position,
   Inhabitant,
