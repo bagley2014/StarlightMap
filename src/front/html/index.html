@@ -6,31 +6,32 @@
     <link rel="stylesheet" href="css" />
   </head>
   <body>
-    <div class="data" hidden>
-      <ul>
-        <li class="Name"></li>
-        <li class="Description"></li>
-        <li class="Position"></li>
-        <li class="Health"></li>
-        <li class="Items"></li>
-        <li class="Conditions"></li>
-      </ul>
-    </div>
     <div id="content">
+      <div class="row">
+          <h1 id="turn"></h1>
+      </div>
       <canvas id="map">
       </canvas>
+      <div class="row">
+        <button id="dataButton">See All Survivors</button><span>Click to highlight the position</span>
+      </div>
+      <div class="row">
+        <input type="text" id="search-survivor">
+        <label for="search-survivor">Search survivor or building from the displayed list (press enter to search)</label>
+      </div>
+      <div class="row">
+        <button id="markButton" class="current">Marked Map</button>
+        <button id="blankButton">Blank Map</button>
+      </div>
       <div id="data">
       </div>
       <div id="stats">
         <table id="resources">
           <caption>Totals Among All Survivors</caption>
         </table>
-        <div class="resourceDetails">
-          <table id="resourceDetails">
-            <caption>Details about resource or conditions (click on it on the table)</caption>
-          </table>
-          </ul>
-        </div>
+        <table id="resourceDetails">
+          <caption>Details about resource or conditions (click on it on the table)</caption>
+        </table>
       </div>
     </div>
     <script src="/script"></script>

@@ -1,15 +1,37 @@
 import Drawer from './drawer/Drawer'
 import Images from './drawer/Images'
+import Zoomer from './drawer/Zoomer'
 import Hexagon from './hexagon/hexagon'
-import Card from './manipulator/manipulator'
+import { Point } from './drawer/Drawer'
+
+import Requests from './init.js'
+import { Card } from './manipulator/manipulator';
+
+// Variables initialisation
+
+const MAP_WIDTH = 962
+const MAP_HEIGHT = 924
 
 const canvas = document.querySelector("canvas#map")
 
+const zoomer = new Zoomer(MAP_WIDTH, MAP_HEIGHT)
 const drawer = new Drawer(canvas);
-const map = new Images()
+const markmap = new Images()
+const blankmap = new Images();
+let map = markmap;
+let clicked = false;
+let mousepos = new Point(0, 0)
 
 const data = document.querySelector("div#data")
 const dataBlueprint = document.querySelector("div.data")
+const dataButton = document.querySelector("button#dataButton")
+
+const inputSearch = document.querySelector('input#search-survivor')
+
+const markButton = document.querySelector("button#markButton")
+const blankButton = document.querySelector("button#blankButton")
+
+const turnTitle = document.querySelector("h1#turn")
 
 const stats = document.querySelector("div#stats")
 
@@ -17,76 +39,143 @@ const table = document.querySelector('table#resources')
 
 const tableDetails = document.querySelector('table#resourceDetails')
 
-const MetadataRequest = new Request('/metadata', {
-  method: 'GET',
-  headers: (new Headers()).append('Accept','application/json')
-})
+/**
+ * @type {Array<Hexagon>}
+ */
+const hexagons = []
 
-const InfoRequest = (x,y) => new Request(`/info?col=${x}&row=${y}`, {
-  method: 'GET',
-  headers: (new Headers()).append('Accept', 'application/json')
-})
+let cards = []
 
-const StatsRequest = new Request('/stats', {
-  method: 'GET',
-  headers: (new Headers()).append('Accept','application/json')
-})
-const DetailsRequest = (stat) => new Request(`/details?stat=${stat}`, {
-  method: 'GET',
-  headers: (new Headers()).append('Accept', 'application/json')
-})
+const factorWidth = () => map.width /canvas.clientWidth / zoomer.scale
+const factorHeight = () => map.height /canvas.clientHeight / zoomer.scale
+
+function zoomOffset() {
+/* A bit complicate math to translate the coordinate from the scale */
+  return {
+    x: map.width / 2 + zoomer.offsetX / zoomer.scale - canvas.clientWidth * factorWidth() / 2,
+    y: map.height / 2 + zoomer.offsetY / zoomer.scale - canvas.clientHeight * factorHeight() / 2
+  }
+}
 
 function translateCoordinate (x, y) {
+  const posx = factorWidth() * x + zoomOffset().x
+  const posy = factorHeight() * y + zoomOffset().y
   return {
-    x: map.width/canvas.clientWidth * x,
-    y: map.height/canvas.clientHeight * y
+    x:  posx,
+    y:  posy
   }
 }
 
 function fetchMetadata() {
-  return fetch(MetadataRequest).then(d => d.json())
+  return fetch(Requests.MetadataRequest()).then(d => d.json())
 }
 
-function templatingData(inhabitants) {
-  const span = document.createElement('span', {
-
-  });
+function fetchTurn() {
+  return fetch(Requests.TurnRequest()).then(d => d.json())
 }
 
-function getSurvivors(x,y) {
-  fetch(InfoRequest(x,y))
-    .then(d => d.json())
-    .then(d => {
-      while(data.firstChild) {
-        data.removeChild(data.firstChild);
+function getSurvivors(x, y) {
+  return (((x && y) ? fetch(Requests.InfoRequest(x,y)) : fetch(Requests.AllInfoRequest()))
+  .then(d => d.json())
+  .then(d => {
+
+    // Cleaning the search
+    inputSearch.value = ""
+
+    // Removing all the card
+    while(data.lastChild && data.lastChild.nodeName === 'DATA-CARD') {
+      data.removeChild(data.lastChild);
+    }
+    cards = []
+
+
+    // Populating the data
+    for(const inhab of d) {
+
+      // Handling firefox comptibility
+      let card;
+      let cardObject;
+      if(navigator.userAgent.indexOf('Chrome') > -1) {
+        card = document.createElement('data-card')
+        cardObject = card
+      } else {
+        cardObject = new Card()
+        card = cardObject.div
       }
-      for(const inhab of d) {
-        console.log(inhab)
-        new Card(dataBlueprint)
-          .fill({
-            Name: inhab.Name,
-            Description: inhab.Description,
-            Position: `${inhab.Position.x},${inhab.Position.y}`,
-            Health: `${inhab.Health}/${inhab.MaxHealth}`,
-            Items: inhab.items.toString().replace(/,/g,', '),
-            Conditions: inhab.condition.toString().replace(/,/g,', ')
-          }).appendIn(data)
+
+      const numItems = '' === inhab.items.toString() ? 0 : inhab.items.length;
+      // Creating the survivor for data-card
+      const survivor = {
+        Name: inhab.Name,
+        Description: inhab.Description,
+        Position: `${inhab.Position.x},${inhab.Position.y}`,
+        Health: `${inhab.Health}/${inhab.MaxHealth}`,
+        Items: `(${numItems}) ` + inhab.items.toString().replace(/,/g,', ')
       }
-    })
+
+       // Pretifiying the conditions and jobs
+      if (!inhab.conditions.includes("")) {
+        survivor.Conditions = inhab.conditions.toString().replace(/,/g,', ')
+      }
+      if (!inhab.jobs.includes("")) {
+        survivor.Jobs = inhab.jobs.toString().replace(/,/g, ', ')
+      }
+
+      // Fill the card
+      cardObject.fill(survivor)
+
+      // Add event for click
+      card.addEventListener('click', e => {
+        let hexa = hexagons.find(hexa => hexa.coord.x === inhab.Position.x && hexa.coord.y === inhab.Position.y)
+        if(hexa) {
+          drawMap(map)
+          hexa.draw(drawer, zoomer, zoomOffset())
+        }
+      })
+
+      // Populating data
+      data.append(card)
+      cards.push({cardObject, card})
+    }
+  }))
 }
 
-const HexagonColor = "#000000"
+dataButton.addEventListener('click', e => getSurvivors());
 
-
-map.load('/map', 962, 924, 0, 0).then(_ => {
-
-  console.log("Map loaded");
+function drawMap(m) {
+  map = m;
   drawer.setSize(map.width, map.height);
-  drawer.drawImageScale(0,0,1,map);
-  console.log("Map drawed");
+  drawer.clean();
+  zoomer.drawZoomed((x, y, scale) => drawer.drawImageScale(x,y, scale ,map), 0, 0);
+}
 
+// The search bar
+inputSearch.addEventListener('change', (e) => {
 
-  const hexagons = []
+  // storing the search value in case we reload th survivors
+  const searchValue = e.target.value.toLowerCase()
+
+  const search = () => cards.forEach((element) => {
+    if(!element.cardObject.data.Name
+      .toLowerCase()
+      .match(new RegExp(searchValue))
+    ) {
+      element.card.hidden = true
+    } else {
+      element.card.hidden = false
+    }
+  })
+
+  if(cards.length <= 0) getSurvivors().then(() => {
+    e.target.value = searchValue
+    search()
+  })
+  else search()
+  
+})
+
+markmap.load('/map', MAP_WIDTH, MAP_HEIGHT, 0, 0).then(_ => {
+  drawMap(markmap);
 
   fetchMetadata().then(metadata => {
     for(let row = 1; row <= 71; row++) {
@@ -107,10 +196,20 @@ map.load('/map', 962, 924, 0, 0).then(_ => {
 
       let hexa = hexagons.find(h => h.isIn(x, y))
       if(hexa) {
-        drawer.clean()
-        drawer.drawImageScale(0,0,1,map)
-        hexa.draw(drawer)
+        drawMap(map)
+        hexa.draw(drawer, zoomer, zoomOffset())
       }
+
+      if(clicked) {
+        zoomer.moveZoom(-e.movementX, -e.movementY)
+        drawMap(map)
+      }
+    })
+
+    canvas.addEventListener('wheel', e => {
+      zoomer.zoom(-e.deltaY / 1000)
+      e.preventDefault()
+      drawMap(map)
     })
 
     canvas.addEventListener('touchstart', e => {
@@ -127,9 +226,8 @@ map.load('/map', 962, 924, 0, 0).then(_ => {
 
       let hexa = hexagons.find(h => h.isIn(x, y))
       if(hexa) {
-        drawer.clean()
-        drawer.drawImageScale(0,0,1,map)
-        hexa.draw(drawer, 80 + touch.radiusY)
+        drawMap(map)
+        hexa.draw(drawer, zoomer, zoomOffset(), 80 + touch.radiusY)
       }
     })
 
@@ -141,9 +239,8 @@ map.load('/map', 962, 924, 0, 0).then(_ => {
 
       let hexa = hexagons.find(h => h.isIn(x, y))
       if(hexa) {
-        drawer.clean()
-        drawer.drawImageScale(0,0,1,map)
-        hexa.draw(drawer)
+        drawMap(map)
+        hexa.draw(drawer, zoomer, zoomOffset())
         getSurvivors(hexa.coord.x, hexa.coord.y)
       }
     })
@@ -154,24 +251,40 @@ map.load('/map', 962, 924, 0, 0).then(_ => {
         getSurvivors(hexa.coord.x, hexa.coord.y)
       }
     })
+
+    canvas.addEventListener('mousedown', e => clicked = true)
+    canvas.addEventListener('mouseup', e => clicked = false)
+    canvas.addEventListener('mouseout', e => clicked = false)
   })
+
+  markButton.addEventListener('click', e => {
+    drawMap(markmap);
+    markButton.classList.add('current');
+    blankButton.classList.remove('current');
+  });
 }, e => console.error(e));
 
-fetch(StatsRequest).then(d => d.json()).then(d => {
+blankmap.load('/blankmap', 962, 924, 0, 0).then(_ => {
+  blankButton.addEventListener('click', e => {
+    drawMap(blankmap);
+    markButton.classList.remove('current');
+    blankButton.classList.add('current');
+  });
+}, e => console.error(e));
 
-  for (const resource in d) {
+fetch(Requests.StatsRequest()).then(d => d.json()).then(d => {
+
+  for (const resource of Object.keys(d).sort()) {
     const rescount = table.insertRow()
-    rescount.className = "resourceCounts"
+
     const name = rescount.insertCell()
-    name.className = "resourceCounts"
     name.appendChild(document.createTextNode(`${resource}`))
 
     const count = rescount.insertCell()
     count.appendChild(document.createTextNode(`${d[resource]}`))
-    count.className = "resourceCounts"
 
     rescount.addEventListener('click', e => {
-      fetch(DetailsRequest(resource)).then(f => f.json()).then(details => {
+      fetch(Requests.DetailsRequest(resource)).then(f => f.json()).then(details => {
         details.sort((a, b) => {
           if(a[3] === b[3]) return 0
           else if(a[3] > b[3]) return 1
@@ -184,15 +297,15 @@ fetch(StatsRequest).then(d => d.json()).then(d => {
 
         for(const detail of details) {
           const row = tableDetails.insertRow()
+          row.addEventListener('click', e => getSurvivors(detail[1],detail[2]))
+
           const surName = row.insertCell()
           surName.appendChild(document.createTextNode(`${detail[0]}`))
 
           const surPos = row.insertCell()
-          surPos.appendChild(document.createTextNode(
-                              `(${detail[1]},${detail[2]})`))
-          surPos.addEventListener('click',
-                                  e => getSurvivors(detail[1],detail[2]))
-          surPos.className = "location"
+          surPos.appendChild(document.createTextNode(`(${detail[1]},${detail[2]})`))
+
+          surPos.classList.add('location')
 
           const surCount = row.insertCell()
           surCount.appendChild(document.createTextNode(`${detail[3]}`))
@@ -200,4 +313,7 @@ fetch(StatsRequest).then(d => d.json()).then(d => {
       })
     })
   }
+})
+fetchTurn().then(d => {
+  turnTitle.textContent = d[0].Turn
 })
